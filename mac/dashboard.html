@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Token Notch</title>
+<!--
+  The open notch's dashboard. The app swaps PAGE_DATA below for this computer's numbers and shows the page
+  in a web view over the notch's glass; `notch.*` at the bottom is how the app talks to it.
+-->
+<style>
+  :root {
+    --text: #f2f4f7;
+    --dim: rgba(242, 244, 247, .6);
+    --well: rgba(255, 255, 255, .07);
+    --rule: rgba(255, 255, 255, .1);
+    --raised: rgba(255, 255, 255, .16);
+    --sheet: rgb(30, 32, 37);
+    --warn: #f0a03c;
+    --over: #ef5a5f;
+  }
+  /* A theme sets the accent, the heatmap's four steps and (in script) the model colors. */
+  [data-theme="ocean"] { --accent: #4a8ef0; --l1: #1f3a66; --l2: #28589e; --l3: #3f7fdc; --l4: #9cc2f7; }
+  [data-theme="forest"] { --accent: #3dbb73; --l1: #1d3d2b; --l2: #23683f; --l3: #36a663; --l4: #9ee6b6; }
+  [data-theme="grape"] { --accent: #9b6cf0; --l1: #33244f; --l2: #523390; --l3: #8257e0; --l4: #cbb2ff; }
+  [data-theme="graphite"] { --accent: #b4bfcc; --l1: #2e333b; --l2: #4b535f; --l3: #7f8a99; --l4: #dde3ea; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; overflow: hidden; background: transparent; color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
+  main { padding: 8px 14px 14px; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  [hidden] { display: none !important; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* Header: the tool on the left, the theme and app settings on the right */
+  .head { position: relative; z-index: 5; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .pop { position: relative; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px 0 8px; border-radius: 999px;
+    background: var(--well); }
+  .chip:hover, .pop.open .chip { background: var(--raised); }
+  .chip.tool { height: 30px; font-size: 15px; font-weight: 600; }
+  .caret { color: var(--dim); font-size: 9px; }
+  .mark { flex: none; width: 16px; height: 16px; }
+  .dot { flex: none; width: 11px; height: 11px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px rgba(255, 255, 255, .25); }
+
+  .sheet { position: absolute; top: calc(100% + 6px); left: 0; min-width: 170px; padding: 5px; border-radius: 12px;
+    background: var(--sheet); box-shadow: 0 0 0 .5px rgba(255, 255, 255, .14), 0 12px 32px rgba(0, 0, 0, .45); display: none; }
+  .pop.open .sheet { display: block; }
+  .sheet.end { left: auto; right: 0; }
+  .sheet h6 { margin: 0; padding: 5px 9px 3px; font-size: 11px; font-weight: 600; color: var(--dim); }
+  .sheet hr { border: 0; border-top: 1px solid var(--rule); margin: 4px 6px; }
+  /* Every row has a lead slot (a mark, a dot or nothing), so names line up either way, and a check slot. */
+  .item { display: grid; grid-template-columns: 16px 1fr 14px; align-items: center; gap: 9px; width: 100%;
+    min-height: 30px; padding: 4px 9px; border-radius: 8px; text-align: left; white-space: nowrap; }
+  .item:hover { background: rgba(255, 255, 255, .09); }
+  .item .dot { justify-self: center; }
+  .item[aria-checked="true"]::after { content: "✓"; color: var(--accent); }
+  .item:disabled { cursor: default; color: var(--dim); }
+  .item:disabled:hover { background: none; }
+  .item:disabled .mark { opacity: .5; }
+  .item small { display: block; font-size: 11px; }
+
+  .controls { display: flex; justify-content: space-between; margin-bottom: 12px; }
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px; background: rgba(255, 255, 255, .06); }
+  .seg button { padding: 4px 11px; border-radius: 7px; color: var(--dim); font-weight: 500; }
+  .seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stats.extra { grid-template-columns: repeat(3, 1fr); margin-top: 8px; }
+  .stat { min-width: 0; padding: 9px 12px 10px; border-radius: 10px; background: var(--well); }
+  .stat span { display: block; color: var(--dim); }
+  .stat strong { display: block; margin-top: 2px; font-size: 18px; font-weight: 650; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .extra .stat strong { font-size: 15px; }
+  .expand { margin-top: 8px; color: var(--dim); }
+  .expand:hover { color: var(--text); }
+
+  .calendar { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px;
+    margin-top: 14px; }
+  .day { aspect-ratio: 1; border-radius: 4px; background: var(--well); }
+  .day.ahead { background: none; }
+  .day.before { opacity: .35; }
+  .s1 { background: var(--l1); } .s2 { background: var(--l2); } .s3 { background: var(--l3); } .s4 { background: var(--l4); }
+  .scale { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: var(--dim); font-size: 12px; }
+  .scale .day { width: 11px; height: 11px; aspect-ratio: auto; border-radius: 3px; }
+
+  .limit { display: flex; align-items: center; gap: 14px; margin-top: 14px; padding: 10px 12px; border-radius: 12px;
+    background: var(--well); color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .limit .lead { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .limit .other { display: flex; gap: 6px; padding-left: 14px; border-left: 1px solid var(--rule); }
+  .limit b { color: var(--text); font-weight: 600; }
+  .gauge { flex: 1; min-width: 40px; height: 5px; border-radius: 3px; background: var(--rule); overflow: hidden; }
+  .gauge i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .limit .warn { color: var(--warn); } .gauge i.warn { background: var(--warn); }
+  .limit .over { color: var(--over); } .gauge i.over { background: var(--over); }
+
+  .mix { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 14px; color: var(--dim); font-size: 12px; }
+  .mix div b { display: block; color: var(--text); font-size: 15px; font-weight: 600; }
+
+  .keys { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 8px; color: var(--dim); }
+  .keys span { display: inline-flex; align-items: center; gap: 6px; }
+  .tag { flex: none; width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+  .bars svg { display: block; overflow: visible; }
+  .bars text { fill: var(--dim); font-size: 11px; }
+  .bars line { stroke: var(--rule); }
+  table { width: 100%; margin-top: 12px; border-collapse: collapse; }
+  th, td { padding: 7px 6px; border-bottom: 1px solid var(--rule); text-align: right; white-space: nowrap; }
+  th { color: var(--dim); font-weight: 500; }
+  th:first-child, td:first-child { text-align: left; }
+  td .tag { display: inline-block; margin-right: 8px; vertical-align: -1px; }
+  caption { caption-side: bottom; padding-top: 8px; color: var(--dim); font-size: 12px; text-align: left; }
+
+  #hint { position: fixed; z-index: 9; pointer-events: none; padding: 4px 8px; border-radius: 6px; background: var(--text);
+    color: #16181c; font-size: 12px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+  <header class="head">
+    <div class="pop" id="toolPop">
+      <button class="chip tool" data-act="pop:tool" aria-haspopup="menu"></button>
+      <div class="sheet" role="menu" aria-label="Tool"></div>
+    </div>
+    <div class="pop" id="prefsPop">
+      <button class="chip" data-act="pop:prefs" aria-haspopup="menu"></button>
+      <div class="sheet end" role="menu" aria-label="Settings"></div>
+    </div>
+  </header>
+  <nav class="controls">
+    <div class="seg" id="tabs"></div>
+    <div class="seg" id="ranges"></div>
+  </nav>
+  <section id="view"></section>
+</main>
+<div id="hint" hidden></div>
+<script>
+"use strict";
+const PAGE = /*PAGE_DATA*/null;
+
+// ---- Reading the numbers ----
+
+// Token counts are always [input, output, cache write, cache read].
+const total = list => list.reduce((a, b) => a + b, 0);
+const dayTotal = day => (day ? total(Object.values(day.tm)) : 0);
+
+function keyOf(date) {
+  const two = n => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+}
+function dateOf(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function shift(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function compact(n) {
+  for (const [size, unit] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]]) {
+    if (n >= size) return String(+(n / size).toFixed(n / size >= 100 ? 0 : 1)) + unit;
+  }
+  return String(Math.round(n));
+}
+const grouped = n => Math.round(n).toLocaleString("en-US");
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const cap = word => word.charAt(0).toUpperCase() + word.slice(1);
+const shortDate = date => date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+const clock = date => date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+function lasted(seconds) {
+  const days = Math.floor(seconds / 86400), hours = Math.floor(seconds / 3600) % 24, mins = Math.floor(seconds / 60) % 60;
+  return [days && `${days}d`, (days || hours) && `${hours}h`, `${mins}m`].filter(Boolean).join(" ");
+}
+
+// claude-opus-5-5 is "Opus 5.5" (a trailing date or [1m] is dropped), gpt-5.6-sol is "GPT-5.6 Sol",
+// codex-auto-review is "Codex Auto Review"; anything else keeps its ID.
+function modelLabel(id) {
+  const parts = id.replace(/\[[^\]]*\]$/, "").split("-");
+  if (parts[0] === "claude" && /^[a-z]+$/.test(parts[1] || "")) {
+    const version = [];
+    for (const part of parts.slice(2)) {
+      if (!/^\d{1,2}$/.test(part)) break;
+      version.push(part);
+    }
+    if (version.length) return `${cap(parts[1])} ${version.join(".")}`;
+  }
+  if (parts[0] === "gpt" && /^\d/.test(parts[1] || "")) return [`GPT-${parts[1]}`, ...parts.slice(2).map(cap)].join(" ");
+  if (parts[0] === "codex") return parts.map(cap).join(" ");
+  return id;
+}
+
+// Everything the overview and models views show for one tool over one range.
+function summarize(source, range) {
+  const today = dateOf(source.today);
+  const keys = Object.keys(source.days).sort();
+  const start = range === "all" ? (keys.length ? dateOf(keys[0]) : today) : shift(today, 1 - Number(range));
+  const from = keyOf(start);
+  const busy = key => source.days[key] && (source.days[key].m > 0 || dayTotal(source.days[key]) > 0);
+
+  // Days that only kept a per-model total are split like that model's all-time usage.
+  const share = {};
+  for (const [id, counts] of Object.entries(source.models)) {
+    const sum = total(counts);
+    share[id] = sum ? counts.map(n => n / sum) : [0, 0, 0, 1];
+  }
+  const byModel = {};
+  const credit = (id, counts) => {
+    const name = modelLabel(id);
+    byModel[name] = (byModel[name] || [0, 0, 0, 0]).map((n, i) => n + counts[i]);
+  };
+
+  const s = { start, today, span: Math.round((today - start) / 864e5) + 1, active: [], messages: 0, sessions: 0,
+    hours: new Array(24).fill(0), busiest: null, estimated: false };
+  for (const key of keys) {
+    if (key < from || key > source.today || !busy(key)) continue;
+    const day = source.days[key];
+    s.active.push(key);
+    s.messages += day.m;
+    s.sessions += day.sc;
+    (source.hours[key] || []).forEach((n, h) => { s.hours[h] += n; });
+    if (!s.busiest || day.m > source.days[s.busiest].m) s.busiest = key;
+    for (const [id, n] of Object.entries(day.tm)) {
+      const exact = (day.sp && day.sp[id]) || [0, 0, 0, 0];
+      const rest = Math.max(0, n - total(exact));
+      if (rest) s.estimated = true;
+      const mix = share[id] || [0, 0, 0, 1];
+      credit(id, exact.map((x, i) => x + rest * mix[i]));
+    }
+  }
+  if (range === "all") {
+    // All time comes straight from the totals, which keep every exact split.
+    for (const name of Object.keys(byModel)) delete byModel[name];
+    for (const [id, counts] of Object.entries(source.models)) credit(id, counts);
+    s.messages = source.totals.messages;
+    s.sessions = source.totals.sessions;
+    s.estimated = !!source.modelsEstimated;
+  }
+  s.byModel = byModel;
+  s.models = Object.keys(byModel).sort((a, b) => total(byModel[b]) - total(byModel[a]));
+  s.tokens = [0, 1, 2, 3].map(i => total(s.models.map(m => byModel[m][i])));
+  s.total = total(s.tokens);
+
+  const on = new Set(s.active);
+  let run = 0;
+  s.longestStreak = 0;
+  for (let d = start; d <= today; d = shift(d, 1)) {
+    run = on.has(keyOf(d)) ? run + 1 : 0;
+    s.longestStreak = Math.max(s.longestStreak, run);
+  }
+  // The current streak counts back from today, or from yesterday while today is still quiet.
+  s.streak = 0;
+  for (let d = busy(source.today) ? today : shift(today, -1); busy(keyOf(d)); d = shift(d, -1)) s.streak++;
+
+  const since = start.getTime() / 1000;
+  s.longestSession = range === "all" ? source.totals.longest : 0;
+  for (const [begin, end] of source.sessions) if (begin >= since) s.longestSession = Math.max(s.longestSession, end - begin);
+  s.peakHour = total(s.hours) ? s.hours.indexOf(Math.max(...s.hours)) : null;
+  return s;
+}
+
+// The plan-limit row for Codex, from the limits it logs with each reply.
+function codexLimit(limits, now = Date.now() / 1000) {
+  // A window that has reset since the last reply is back to zero.
+  const windows = (limits || []).map(w => (w.resetsAt && w.resetsAt < now
+    ? { minutes: w.minutes, percent: 0, resetsAt: null } : { minutes: w.minutes, percent: +w.percent || 0, resetsAt: w.resetsAt }));
+  if (!windows.length) return null;
+  const name = m => !m ? "Limit" : m === 300 ? "5-hour" : m === 10080 ? "Weekly"
+    : m >= 1440 ? `${Math.round(m / 1440)}-day` : `${Math.round(m / 60)}-hour`;
+  const level = p => (p >= 95 ? "over" : p >= 80 ? "warn" : "");
+  const at = t => {
+    const d = new Date(t * 1000);
+    return keyOf(d) === keyOf(new Date()) ? clock(d) : `${d.toLocaleDateString("en-US", { weekday: "short" })} ${clock(d)}`;
+  };
+  const [first, second] = windows;
+  const row = { label: name(first.minutes), value: `${Math.round(first.percent)}%`, fraction: first.percent / 100,
+    level: level(first.percent), detail: first.resetsAt ? `resets ${at(first.resetsAt)}` : "", tip: "As of your last Codex message" };
+  if (second) {
+    row.side = { label: name(second.minutes), value: `${Math.round(second.percent)}%`, level: level(second.percent),
+      tip: second.resetsAt ? `Resets ${at(second.resetsAt)}` : "" };
+  }
+  return row;
+}
+
+// ---- What's on screen ----
+
+const TOOLS = {
+  claude: { name: "Claude Code", data: PAGE },
+  codex: { name: "Codex", data: PAGE && PAGE.codex ? { ...PAGE.codex, today: PAGE.today, generatedAt: PAGE.generatedAt } : null },
+};
+const used = key => !!(TOOLS[key].data && Object.keys(TOOLS[key].data.days).length);
+
+const THEMES = {
+  ocean: { name: "Ocean", models: ["#4a8ef0", "#7fb6ff", "#3fc1c9", "#8e9ad6", "#b07ce8", "#4fb98a", "#e0a24a", "#9aa3ae"] },
+  forest: { name: "Forest", models: ["#3dbb73", "#8fe0a8", "#2f8f9e", "#a3c46b", "#5e9ee0", "#d8b04c", "#a78bd8", "#9aa69e"] },
+  grape: { name: "Grape", models: ["#9b6cf0", "#cfa8ff", "#e07bb8", "#7f8fe0", "#59b7d9", "#e39a5b", "#62c29a", "#a59cb2"] },
+  graphite: { name: "Graphite", models: ["#7cc4ff", "#b69cff", "#5fd3a6", "#f5c451", "#f283b8", "#5ad1e6", "#f79a5b", "#a3adba"] },
+};
+const NOTCH_CHOICES = [["tokens", "Today's tokens"], ["fiveHour", "5-hour limit"], ["weekly", "Weekly limit"]];
+const RANGES = [["all", "All"], ["30", "30d"], ["7", "7d"], ["1", "1d"]];
+const TABS = [["overview", "Overview"], ["models", "Models"]];
+
+// The same marks the app draws in the notch: Claude's twelve uneven rays, Codex's terminal.
+// Each ray is [angle in degrees, length as a share of the radius], as in the app's ClaudeMark.
+const RAYS = [[0, 1], [31, .8], [59, .95], [89, .72], [119, .98], [149, .8], [180, .93], [211, .75], [239, 1], [269, .82],
+  [299, .92], [329, .77]];
+const MARKS = {
+  claude: `<svg class="mark" viewBox="-12 -12 24 24" stroke="#d97757" stroke-width="2.4" stroke-linecap="round">${RAYS.map(([deg, len]) => {
+    const a = deg * Math.PI / 180;
+    return `<line x2="${(Math.cos(a) * 10.4 * len).toFixed(2)}" y2="${(Math.sin(a) * 10.4 * len).toFixed(2)}"/>`;
+  }).join("")}</svg>`,
+  codex: `<svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
+    stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="6" stroke-width="1.9"/><path d="M7 8l4 4-4 4M13 16.3h5"/></svg>`,
+};
+
+const STORE = "tokenNotch.view";
+const remembered = (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } })();
+const view = {
+  tab: TABS.some(([k]) => k === remembered.tab) ? remembered.tab : "overview",
+  range: RANGES.some(([k]) => k === remembered.range) ? remembered.range : "all",
+  theme: remembered.theme in THEMES ? remembered.theme : "ocean",
+  more: !!remembered.more,
+  // The page opens on the tool used last, unless only the other one has any usage.
+  tool: PAGE && TOOLS[PAGE.active] && used(PAGE.active) ? PAGE.active : used("claude") || !used("codex") ? "claude" : "codex",
+};
+const app = { limits: null, animate: true, notch: "tokens" };
+let openMenu = null;
+
+function remember() {
+  try { localStorage.setItem(STORE, JSON.stringify({ tab: view.tab, range: view.range, theme: view.theme, more: view.more })); } catch {}
+}
+
+const native = (window.webkit && window.webkit.messageHandlers) || {};
+const tell = (name, value) => native[name] && native[name].postMessage(value);
+const clean = text => String(text == null ? "" : text).replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
+const $ = id => document.getElementById(id);
+
+const stat = (label, value) => `<div class="stat"><span>${label}</span><strong class="num" data-hint="${clean(value)}">${clean(value)}</strong></div>`;
+const item = (act, lead, label, checked, attrs = "") =>
+  `<button class="item" role="menuitemradio" data-act="${act}" aria-checked="${!!checked}" ${attrs}>${lead}<span>${label}</span></button>`;
+
+function drawHeader() {
+  const tool = TOOLS[view.tool];
+  document.querySelector("#toolPop .chip").innerHTML = `${MARKS[view.tool]}<span>${tool.name}</span><span class="caret">▼</span>`;
+  document.querySelector("#toolPop .sheet").innerHTML = Object.entries(TOOLS).map(([key, t]) => (used(key)
+    ? item(`tool:${key}`, MARKS[key], t.name, key === view.tool)
+    : item("", MARKS[key], `${t.name}<small>No ${t.name} usage found</small>`, false, "disabled"))).join("");
+
+  const theme = THEMES[view.theme];
+  document.querySelector("#prefsPop .chip").innerHTML =
+    `<span class="dot" style="--c:var(--accent)"></span><span>${theme.name}</span><span class="caret">▼</span>`;
+  let prefs = "<h6>Theme</h6>" + Object.entries(THEMES).map(([key, t]) =>
+    item(`theme:${key}`, `<span class="dot" data-theme="${key}" style="--c:var(--accent)"></span>`, t.name, key === view.theme)).join("");
+  // Settings that belong to the app, shown only inside it.
+  if (native.notchShows) {
+    prefs += "<hr><h6>Notch shows</h6>" + NOTCH_CHOICES.map(([key, label]) =>
+      item(`notch:${key}`, "<span></span>", label, key === app.notch)).join("");
+  }
+  if (native.animateIcon) {
+    prefs += `<hr><button class="item" role="menuitemcheckbox" data-act="animate" aria-checked="${app.animate}"><span></span><span>Animate icon</span></button>`;
+  }
+  document.querySelector("#prefsPop .sheet").innerHTML = prefs;
+  $("toolPop").classList.toggle("open", openMenu === "tool");
+  $("prefsPop").classList.toggle("open", openMenu === "prefs");
+}
+
+function drawControls() {
+  const seg = (list, act, current) => list.map(([key, label]) =>
+    `<button data-act="${act}:${key}" aria-pressed="${key === current}">${label}</button>`).join("");
+  $("tabs").innerHTML = seg(TABS, "tab", view.tab);
+  $("ranges").innerHTML = seg(RANGES, "range", view.range);
+}
+
+function limitRow(row) {
+  if (!row) return "";
+  const tone = l => (l === "warn" || l === "over" ? l : "");
+  const width = Math.round(Math.min(1, Math.max(0, +row.fraction || 0)) * 100);
+  const other = row.side
+    ? `<div class="other" data-hint="${clean(row.side.tip)}"><span>${clean(row.side.label)}</span><b class="num ${tone(row.side.level)}">${clean(row.side.value)}</b></div>`
+    : "";
+  return `<div class="limit"><div class="lead"><span>${clean(row.label)}</span><b class="num ${tone(row.level)}">${clean(row.value)}</b>` +
+    `<span class="gauge"><i class="${tone(row.level)}" style="width:${width}%"></i></span>` +
+    `<span data-hint="${clean(row.tip)}">${clean(row.detail)}</span>${row.note ? ` <span data-hint="${clean(row.note)}">ⓘ</span>` : ""}</div>${other}</div>`;
+}
+
+function overview(source, s) {
+  const tiles = stat("Total tokens", compact(s.total)) + stat("Active days", `${s.active.length}/${s.span}`) +
+    stat("Favorite model", s.models[0] || "—") + stat("Longest streak", plural(s.longestStreak, "day"));
+  const extra = stat("Sessions", grouped(s.sessions)) + stat("Messages", grouped(s.messages)) +
+    stat("Peak hour", s.peakHour == null ? "—" : `${s.peakHour % 12 || 12} ${s.peakHour < 12 ? "AM" : "PM"}`) +
+    stat("Current streak", plural(s.streak, "day")) + stat("Longest session", s.longestSession ? lasted(s.longestSession) : "—") +
+    stat("Most active day", s.busiest ? shortDate(dateOf(s.busiest)) : "—");
+
+  // 26 weeks, Sunday to Saturday, shaded by each day's tokens in quarters of all the days with any.
+  const sorted = Object.values(source.days).map(dayTotal).filter(n => n > 0).sort((a, b) => a - b);
+  const quarter = p => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+  const steps = sorted.length ? [quarter(.25), quarter(.5), quarter(.75)] : [];
+  const step = n => (!n ? "" : ` s${1 + steps.filter(edge => n > edge).length}`);
+  const last = shift(s.today, 6 - s.today.getDay());
+  const from = keyOf(s.start);
+  let cells = "";
+  for (let d = shift(last, -181); d <= last; d = shift(d, 1)) {
+    const key = keyOf(d), n = dayTotal(source.days[key]);
+    const where = d > s.today ? " ahead" : key < from && n ? " before" : "";
+    cells += `<div class="day${step(n)}${where}" data-hint="${shortDate(d)}: ${compact(n)} tokens"></div>`;
+  }
+
+  const about = s.estimated ? "≈" : "";
+  const mix = [["Input", 0], ["Output", 1], ["Cache read", 3], ["Cache write", 2]]
+    .map(([label, i]) => `<div><b class="num">${about}${compact(s.tokens[i])}</b>${label}</div>`).join("");
+  const limit = view.tool === "codex" ? codexLimit(source.limits) : app.limits;
+
+  return `<div class="stats">${tiles}</div>` +
+    `<div class="stats extra"${view.more ? "" : " hidden"}>${extra}</div>` +
+    `<button class="expand" data-act="more" aria-expanded="${view.more}">${view.more ? "Fewer stats ▴" : "More stats ▾"}</button>` +
+    `<div class="calendar">${cells}</div>` +
+    `<div class="scale">Less <span class="day"></span><span class="day s1"></span><span class="day s2"></span><span class="day s3"></span><span class="day s4"></span> More</div>` +
+    limitRow(limit) + `<div class="mix">${mix}</div>`;
+}
+
+function models(source, s) {
+  const palette = THEMES[view.theme].models;
+  // Colors follow all-time rank, so a model keeps its color in every range.
+  const ranked = summarize(source, "all").models;
+  const color = name => palette[Math.max(0, ranked.indexOf(name)) % palette.length];
+  const keys = s.models.map(n => `<span><i class="tag" style="--c:${color(n)}"></i>${clean(n)}</span>`).join("");
+
+  const days = [];
+  for (let d = s.start; d <= s.today; d = shift(d, 1)) days.push(d);
+  const stacks = days.map(d => {
+    const out = {};
+    const day = source.days[keyOf(d)];
+    if (day) for (const [id, n] of Object.entries(day.tm)) out[modelLabel(id)] = (out[modelLabel(id)] || 0) + n;
+    return out;
+  });
+  const peak = Math.max(1, ...stacks.map(o => total(Object.values(o))));
+  const width = document.querySelector("main").clientWidth - 28 || 572, height = 150;
+  const slot = Math.min(28, width / days.length), gap = slot > 6 ? 2 : slot > 3 ? 1 : 0;
+  let rects = "";
+  stacks.forEach((stack, i) => {
+    let top = height;
+    for (const name of s.models) {
+      if (!stack[name]) continue;
+      const h = Math.max(1, stack[name] / peak * (height - 4));
+      top -= h;
+      rects += `<rect x="${(i * slot).toFixed(1)}" y="${top.toFixed(1)}" width="${Math.max(.5, slot - gap).toFixed(1)}" height="${h.toFixed(1)}"` +
+        ` rx="${slot > 6 ? 2 : 0}" fill="${color(name)}" data-hint="${shortDate(days[i])} · ${clean(name)}: ${compact(stack[name])}"/>`;
+    }
+  });
+  const chart = `<svg width="${width}" height="${height + 18}" role="img" aria-label="Tokens per day by model">${rects}` +
+    `<line x1="0" x2="${width}" y1="${height + .5}" y2="${height + .5}"/>` +
+    `<text x="0" y="${height + 14}">${shortDate(s.start)}</text>` +
+    `<text x="${width}" y="${height + 14}" text-anchor="end">Today · peak ${compact(peak)}/day</text></svg>`;
+
+  const rows = s.models.map(name => {
+    const c = s.byModel[name], sum = total(c);
+    return `<tr><td><i class="tag" style="--c:${color(name)}"></i>${clean(name)}</td><td>${compact(sum)}</td>` +
+      `<td>${(sum / (s.total || 1) * 100).toFixed(1)}%</td>${[0, 1, 2, 3].map(i => `<td>${compact(c[i])}</td>`).join("")}</tr>`;
+  }).join("");
+  const note = s.estimated ? "<caption>Input, output and cache are estimated for days whose history only kept a total per model.</caption>" : "";
+  return `<div class="keys">${keys}</div><div class="bars">${chart}</div>` +
+    `<table class="num">${note}<tr><th>Model</th><th>Tokens</th><th>Share</th><th>Input</th><th>Output</th><th>Cache write</th><th>Cache read</th></tr>${rows}</table>`;
+}
+
+function render() {
+  document.documentElement.dataset.theme = view.theme;
+  drawHeader();
+  drawControls();
+  const source = TOOLS[view.tool].data;
+  if (!source) { $("view").innerHTML = ""; return; }
+  const s = summarize(source, view.range);
+  $("view").innerHTML = view.tab === "models" ? models(source, s) : overview(source, s);
+}
+
+// ---- Input ----
+
+document.addEventListener("click", event => {
+  const target = event.target.closest("[data-act]");
+  const [act, value] = target ? target.dataset.act.split(":") : [];
+  if (act === "pop") {
+    openMenu = openMenu === value ? null : value;
+  } else {
+    openMenu = null;
+    if (act === "tool" && used(value)) view.tool = value;
+    if (act === "theme") view.theme = value;
+    if (act === "tab") view.tab = value;
+    if (act === "range") view.range = value;
+    if (act === "more") view.more = !view.more;
+    if (act === "notch") { app.notch = value; tell("notchShows", value); }
+    if (act === "animate") { app.animate = !app.animate; tell("animateIcon", app.animate); }
+    remember();
+  }
+  render();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && openMenu) { openMenu = null; render(); }
+});
+
+// A tooltip that shows at once, unlike the system's.
+const hint = $("hint");
+document.addEventListener("mousemove", event => {
+  const over = event.target.closest && event.target.closest("[data-hint]");
+  hint.hidden = !over || !over.dataset.hint;
+  if (hint.hidden) return;
+  hint.textContent = over.dataset.hint;
+  const left = Math.min(event.clientX + 12, innerWidth - hint.offsetWidth - 8);
+  const top = event.clientY - hint.offsetHeight - 10;
+  hint.style.left = `${left}px`;
+  hint.style.top = `${top < 4 ? event.clientY + 16 : top}px`;
+});
+document.addEventListener("mouseleave", () => { hint.hidden = true; });
+
+// ---- The app's side ----
+
+window.notch = {
+  /** The plan-limit row for Claude Code, which only the app can ask for. */
+  limits(row) { app.limits = row; render(); },
+  /** The app's settings, so the menu matches them. */
+  settings({ animate, shows }) { app.animate = !!animate; app.notch = shows; render(); },
+  /** Sets what's shown (tool, tab, range, theme, more) without remembering it; for the README's pictures. */
+  show(state) { Object.assign(view, state); openMenu = null; render(); },
+  height() { return Math.ceil(document.querySelector("main").getBoundingClientRect().height); },
+};
+// The notch grows to the page's height, so it never scrolls.
+if (native.height && window.ResizeObserver) {
+  new ResizeObserver(() => tell("height", notch.height())).observe(document.querySelector("main"));
+}
+let resizing;
+addEventListener("resize", () => { clearTimeout(resizing); resizing = setTimeout(render, 150); });
+render();
+</script>
+</body>
+</html>

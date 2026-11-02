@@ -1,0 +1,61 @@
+# Builds the app on GitHub's Mac and publishes it as a release.
+# - Pushing a tag like v0.3.0 releases it, with the tag's message as the notes.
+# - Running it by hand with an existing tag builds that version again and replaces its release,
+#   keeping its title and notes.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish again"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+
+      - name: Test
+        if: github.event_name == 'push'
+        run: swift test --package-path mac
+
+      - name: Build
+        run: mac/build-app.sh
+
+      - name: Zip
+        run: |
+          app="$(ls -d mac/build/*.app | head -1)"
+          name="$(basename "$app" .app | tr ' ' '-').zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$name"
+          echo "ZIP=$name" >> "$GITHUB_ENV"
+
+      - name: Notes
+        run: |
+          if gh release view "$TAG" --json body --jq .body > notes.md 2>/dev/null; then
+            # Publishing again keeps the release's title and notes.
+            echo "TITLE=$(gh release view "$TAG" --json name --jq .name)" >> "$GITHUB_ENV"
+            echo "REPLACE=1" >> "$GITHUB_ENV"
+          else
+            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+            git for-each-ref "refs/tags/$TAG" --format='%(contents)' > notes.md
+            echo "TITLE=Token Notch for Mac ${TAG#v}" >> "$GITHUB_ENV"
+          fi
+          cat notes.md
+
+      - name: Publish
+        run: |
+          if [ -n "${REPLACE:-}" ]; then gh release delete "$TAG" --yes; fi
+          gh release create "$TAG" "$ZIP" --verify-tag --title "$TITLE" --notes-file notes.md

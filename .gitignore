@@ -1,0 +1,7 @@
+index.html
+cache.json
+*.log
+.DS_Store
+__pycache__/
+mac/.build/
+mac/build/
